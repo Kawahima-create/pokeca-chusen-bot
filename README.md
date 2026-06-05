@@ -88,8 +88,24 @@ python main.py
 
 - **torecamap / ポケセン公式直**: torecamapは恒常ガイド記事（締切なし）のためトリガーには不向き、
   ポケセン公式直はJSレンダリングで脆い。両者の内容は入荷Now経由でカバーされるため未実装。
-- **`/list` 等の対話コマンド**: Discord Gatewayの常時接続が必要なため、このGitHub Actions構成では非対応。
-  欲しい場合は discord.py 常駐Bot を VPS/Railway 等に置く拡張が必要（別途）。
+- **`/list` 対話コマンド**: `bot.py`（discord.py 常駐Bot）として実装済み。Gateway常時接続が必要なため
+  GitHub Actionsではなく常時稼働ホスト（Railway等）で動かす。下記「対話Botのデプロイ」参照。
+
+## 対話Botのデプロイ（Railway）
+
+`bot.py` は `/list` で開催中の抽選一覧を返す常駐Bot。通知Botと同じトークンを使う。
+
+1. https://railway.app に GitHub でログイン
+2. **New Project → Deploy from GitHub repo** → `pokeca-chusen-bot` を選択
+3. **Variables** に環境変数を登録:
+   - `DISCORD_BOT_TOKEN` … 通知Botと同じトークン
+   - `GUILD_ID` … `1512505931663933570`（ポケカサーバー。即コマンド反映用）
+4. `Procfile` の `worker: python bot.py` で起動する。Deployログに「ログイン成功」が出ればOK
+5. Discordで `/list` を実行して動作確認
+
+> 💡 `state.json` 更新のたびにRailwayが再デプロイするのを防ぐには、Railwモジュールの
+> **Settings → Watch Paths** に `/*` と `!state.json` を設定する（任意）。
+> Railwayは無料トライアル枠の後は月$5前後。完全無料にしたい場合は Fly.io 無料枠 / 自宅PC / Oracle Cloud無料VPS でも可。
 
 ## 抽選サイト 当たりやすさメモ（参考）
 
