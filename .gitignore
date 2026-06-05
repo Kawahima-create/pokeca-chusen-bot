@@ -1,0 +1,9 @@
+# ローカルのdry-run等で生成される状態ファイルはコミットしない。
+# CI(GitHub Actions)側は `git add -f state.json` で強制追加し永続化する。
+state.json
+
+__pycache__/
+*.pyc
+.env
+.venv/
+venv/
