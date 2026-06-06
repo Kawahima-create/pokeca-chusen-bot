@@ -89,11 +89,22 @@ def notify_text(message: str, channel_id: str, token: str) -> None:
     _post(channel_id, token, {"content": message})
 
 
-def notify_email_win(subject: str, sender: str, snippet: str, channel_id: str, token: str) -> None:
-    """当選メール検知の通知。"""
+_RESULT_STYLE = {
+    "win": ("🎉 当選メールを検知しました！", 0xFFD700, "@here 当選かも！メールを確認してください 🎴"),
+    "lose": ("😢 落選メールを検知しました", 0x95A5A6, "抽選結果（落選の可能性）が届きました"),
+}
+
+
+def notify_email_result(
+    subject: str, sender: str, snippet: str, outcome: str, channel_id: str, token: str
+) -> None:
+    """当落メール検知の通知。outcome は 'win' / 'lose'。"""
+    title, color, content = _RESULT_STYLE.get(
+        outcome, ("📋 抽選結果メールを検知しました", 0x3498DB, "抽選結果メールが届きました")
+    )
     embed = {
-        "title": "🎉 当選メールを検知しました！",
-        "color": 0xFFD700,  # ゴールド
+        "title": title,
+        "color": color,
         "fields": [
             {"name": "件名", "value": (subject or "(件名なし)")[:1024], "inline": False},
             {"name": "差出人", "value": (sender or "(不明)")[:1024], "inline": False},
@@ -101,7 +112,7 @@ def notify_email_win(subject: str, sender: str, snippet: str, channel_id: str, t
         ],
         "footer": {"text": "メール監視 (iCloud)"},
     }
-    _post(channel_id, token, {"content": "@here 当選かも！メールを確認してください 🎴", "embeds": [embed]})
+    _post(channel_id, token, {"content": content, "embeds": [embed]})
 
 
 def get_credentials() -> tuple[str, str]:

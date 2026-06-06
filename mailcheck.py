@@ -74,11 +74,16 @@ def _get_body(msg) -> str:
     return _decode_part(msg)
 
 
-def _is_win(subject: str, body: str) -> bool:
+def _classify(subject: str, body: str) -> str | None:
+    """当落を判定。'win' / 'lose' / None（結果メールでない）を返す。"""
     text = f"{subject}\n{body}"
+    if not any(c in text for c in CONTEXT):
+        return None  # ポケカ抽選と無関係
     if any(k in text for k in LOSE):
-        return False
-    return any(k in text for k in WIN) and any(c in text for c in CONTEXT)
+        return "lose"
+    if any(k in text for k in WIN):
+        return "win"
+    return None  # 当落どちらの語も無ければ結果メールではない（応募確認等は除外）
 
 
 def load_state() -> int:
@@ -131,14 +136,15 @@ def main() -> int:
             subject = _decode_header(msg.get("Subject"))
             sender = _decode_header(msg.get("From"))
             body = _get_body(msg)
-            if _is_win(subject, body):
+            outcome = _classify(subject, body)
+            if outcome:
                 snippet = re.sub(r"\s+", " ", body).strip()[:500]
-                notifier.notify_email_win(subject, sender, snippet, channel, token)
+                notifier.notify_email_result(subject, sender, snippet, outcome, channel, token)
                 hits += 1
-                print(f"[hit] UID {uid}: {subject[:50]}")
+                print(f"[hit:{outcome}] UID {uid}: {subject[:50]}")
 
         save_state(max(uids) if uids else last_uid)
-        print(f"[info] 当選検知: {hits}件 / 走査 {len(uids)}件")
+        print(f"[info] 結果メール検知: {hits}件 / 走査 {len(uids)}件")
         return 0
     finally:
         try:
