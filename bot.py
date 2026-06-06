@@ -17,6 +17,7 @@ import discord
 from discord import app_commands
 
 import notifier
+import prices
 import sources
 import store
 
@@ -139,6 +140,34 @@ async def applied_cmd(interaction: discord.Interaction) -> None:
         f"**申込済みの抽選（{len(lines)}件）**\n" + "\n".join(lines),
         ephemeral=True,
     )
+
+
+@client.tree.command(name="price", description="BOX名から買取価格を比較（高い順）")
+@app_commands.describe(box="BOX名（例: アビスアイ / イーブイヒーローズ / スタートデッキ100）")
+async def price_cmd(interaction: discord.Interaction, box: str) -> None:
+    await interaction.response.defer(thinking=True)
+    results = await asyncio.to_thread(prices.search, box)
+    if not results:
+        await interaction.followup.send(
+            f"「{box}」に一致する買取価格が見つかりませんでした。BOX名を変えて試してください。"
+        )
+        return
+
+    lines = []
+    for i, r in enumerate(results):
+        mark = "👑 " if i == 0 else "・"
+        url = r.get("url", "")
+        shop = f"[{r['shop']}]({url})" if url else r["shop"]
+        lines.append(f"{mark}**{shop}**: ¥{r['price']:,}　（{r['name']}）")
+
+    top = results[0]
+    emb = discord.Embed(
+        title=f"💰 「{box}」の買取価格",
+        description="\n".join(lines),
+        color=0x2ECC71,
+    )
+    emb.set_footer(text=f"一番高いのは {top['shop']}（¥{top['price']:,}）／価格は変動します")
+    await interaction.followup.send(embed=emb)
 
 
 def main() -> None:
