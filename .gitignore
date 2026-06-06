@@ -13,3 +13,6 @@ venv/
 
 # 申込状態（ローカル）
 applied.json
+
+# 当選メールチェックの状態（CIが-fで永続化）
+mail_state.json

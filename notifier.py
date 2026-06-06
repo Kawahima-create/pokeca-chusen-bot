@@ -89,6 +89,21 @@ def notify_text(message: str, channel_id: str, token: str) -> None:
     _post(channel_id, token, {"content": message})
 
 
+def notify_email_win(subject: str, sender: str, snippet: str, channel_id: str, token: str) -> None:
+    """当選メール検知の通知。"""
+    embed = {
+        "title": "🎉 当選メールを検知しました！",
+        "color": 0xFFD700,  # ゴールド
+        "fields": [
+            {"name": "件名", "value": (subject or "(件名なし)")[:1024], "inline": False},
+            {"name": "差出人", "value": (sender or "(不明)")[:1024], "inline": False},
+            {"name": "本文（抜粋）", "value": (snippet or "")[:1000] or "(本文なし)", "inline": False},
+        ],
+        "footer": {"text": "メール監視 (iCloud)"},
+    }
+    _post(channel_id, token, {"content": "@here 当選かも！メールを確認してください 🎴", "embeds": [embed]})
+
+
 def get_credentials() -> tuple[str, str]:
     token = os.environ.get("DISCORD_BOT_TOKEN", "").strip()
     channel = os.environ.get("DISCORD_CHANNEL_ID", "").strip()
