@@ -92,6 +92,7 @@ def notify_text(message: str, channel_id: str, token: str) -> None:
 _RESULT_STYLE = {
     "win": ("🎉 当選メールを検知しました！", 0xFFD700, "@here 当選かも！メールを確認してください 🎴"),
     "lose": ("😢 落選メールを検知しました", 0x95A5A6, "抽選結果（落選の可能性）が届きました"),
+    "amazon_invite": ("🎊 Amazon 招待当選！", 0xFF9900, "@here Amazonの招待に選ばれました！購入手続きを確認してください 🛒"),
 }
 
 

@@ -27,15 +27,22 @@ STATE_PATH = Path(os.environ.get("MAIL_STATE_PATH", "mail_state.json"))
 LOOKBACK = 200  # 初回シード以降、安全のため直近この件数までを走査対象に含める
 
 # 判定キーワード（LOSEを先に見て誤検知を防ぐ。「ご当選とはなりませんでした」対策）
+# 落選（特定的な句。当選判定より先にチェックする＝「ご当選とはなりませんでした」対策）
 LOSE = [
-    "落選", "当選とはなりません", "ご当選とはなり", "ご期待に添え", "抽選に外れ",
-    "ご縁がなかった", "今回は見送", "ご用意できません", "残念ながら", "ご当選されませんでした",
+    "落選", "当選とはなりません", "ご当選とはなり", "ご当選されませんでした", "ご期待に添え",
+    "抽選に外れ", "ご縁がなかった", "今回は見送", "ご用意できません",
 ]
-WIN = [
-    "当選", "ご当選", "当選されました", "当選しました", "当選者", "購入のご案内",
-    "お支払い手続き", "お支払いお手続き", "購入権",
+LOSE_GENERIC = ["残念ながら"]  # 汎用的なので文脈ありの時だけ落選扱い
+# 当選（特定的な句は文脈なしでも検知）
+WIN_STRONG = [
+    "ご当選", "当選されました", "当選しました", "当選のご案内", "ご当選おめでとう",
+    "当選者様", "購入のご案内", "お支払い手続き", "お支払いお手続き",
 ]
+WIN_WEAK = ["当選", "当選者", "購入権"]  # 汎用的なので文脈ありの時だけ当選扱い
 CONTEXT = ["抽選", "ポケモン", "ポケカ", "カード", "予約", "BOX"]
+# Amazon招待制の当選（件名「おめでとうございます。招待者に選ばれました」等）。
+# 文脈ワードを含まないため専用トリガーとして扱う。
+INVITE = ["招待者に選ばれました", "招待者に選出", "招待者に当選", "招待者に選定"]
 
 
 def _decode_header(value: str | None) -> str:
@@ -75,15 +82,25 @@ def _get_body(msg) -> str:
 
 
 def _classify(subject: str, body: str) -> str | None:
-    """当落を判定。'win' / 'lose' / None（結果メールでない）を返す。"""
+    """当落を判定。'amazon_invite' / 'win' / 'lose' / None（結果メールでない）を返す。"""
     text = f"{subject}\n{body}"
-    if not any(c in text for c in CONTEXT):
-        return None  # ポケカ抽選と無関係
+    has_context = any(c in text for c in CONTEXT)
+
+    # 1. Amazon招待制の当選（文脈ワードを含まないので最優先・文脈不要）
+    if any(k in text for k in INVITE):
+        return "amazon_invite"
+    # 2. 落選（特定句は文脈不要。当選より先に判定し「ご当選とはなりません」を取りこぼさない）
     if any(k in text for k in LOSE):
         return "lose"
-    if any(k in text for k in WIN):
+    # 3. 当選（特定句は文脈不要、汎用句は文脈ありの時のみ）
+    if any(k in text for k in WIN_STRONG):
         return "win"
-    return None  # 当落どちらの語も無ければ結果メールではない（応募確認等は除外）
+    if has_context and any(k in text for k in WIN_WEAK):
+        return "win"
+    # 4. 汎用的な落選句は文脈ありの時のみ
+    if has_context and any(k in text for k in LOSE_GENERIC):
+        return "lose"
+    return None
 
 
 def load_state() -> int:
