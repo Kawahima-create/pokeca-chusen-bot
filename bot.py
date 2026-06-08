@@ -107,14 +107,36 @@ async def on_ready() -> None:
         heartbeat.start()
 
 
-@client.tree.command(name="list", description="開催中のポケカ抽選を一覧表示します")
+# 買取価格がこの額以上、または価格データ無し（新弾）のBOXを「投機性あり」とみなす
+SPECULATIVE_THRESHOLD = int(os.environ.get("SPECULATIVE_THRESHOLD", "8000"))
+
+
+def _is_speculative(product: str) -> bool:
+    """投機性（転売価値）があるか。価格データ無しは新弾の可能性があるため表示扱い。"""
+    try:
+        results = prices.search(product)
+    except Exception:  # noqa: BLE001
+        return True
+    if not results:
+        return True
+    return max(r["price"] for r in results) >= SPECULATIVE_THRESHOLD
+
+
+def _filter_speculative(lots: list) -> list:
+    return [lot for lot in lots if _is_speculative(lot.product)]
+
+
+@client.tree.command(name="list", description="開催中のポケカ抽選（投機性BOXのみ）を一覧表示します")
 async def list_cmd(interaction: discord.Interaction) -> None:
     # スクレイプに数秒かかるので、まず「考え中…」で応答時間を確保
     await interaction.response.defer(thinking=True)
 
     lots = await asyncio.to_thread(sources.fetch_all)
+    lots = await asyncio.to_thread(_filter_speculative, lots)
     if not lots:
-        await interaction.followup.send("いま受付中の抽選は見つかりませんでした。")
+        await interaction.followup.send(
+            "いま投機性のある（転売価値が見込める）BOXの抽選は見つかりませんでした。"
+        )
         return
 
     order = {"受付中": 0, "近日開始": 1, "会員限定": 2}
@@ -122,7 +144,7 @@ async def list_cmd(interaction: discord.Interaction) -> None:
 
     shown = lots[:10]  # 申込ボタンを個別に付けるため1抽選=1メッセージ
     extra = len(lots) - len(shown)
-    head = f"🎴 開催中の抽選 **{len(lots)}件**"
+    head = f"💎 投機性BOXの抽選 **{len(lots)}件**"
     if extra > 0:
         head += f"（先頭{len(shown)}件を表示）"
     await interaction.followup.send(content=head)
