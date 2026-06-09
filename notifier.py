@@ -97,9 +97,10 @@ _RESULT_STYLE = {
 
 
 def notify_email_result(
-    subject: str, sender: str, snippet: str, outcome: str, channel_id: str, token: str
+    subject: str, sender: str, snippet: str, outcome: str, channel_id: str, token: str,
+    source: str = "iCloud",
 ) -> None:
-    """当落メール検知の通知。outcome は 'win' / 'lose'。"""
+    """当落メール検知の通知。outcome は 'win' / 'lose' / 'amazon_invite'。source は検知元メール。"""
     title, color, content = _RESULT_STYLE.get(
         outcome, ("📋 抽選結果メールを検知しました", 0x3498DB, "抽選結果メールが届きました")
     )
@@ -111,7 +112,7 @@ def notify_email_result(
             {"name": "差出人", "value": (sender or "(不明)")[:1024], "inline": False},
             {"name": "本文（抜粋）", "value": (snippet or "")[:1000] or "(本文なし)", "inline": False},
         ],
-        "footer": {"text": "メール監視 (iCloud)"},
+        "footer": {"text": f"メール監視 ({source})"},
     }
     _post(channel_id, token, {"content": content, "embeds": [embed]})
 
