@@ -33,21 +33,29 @@ STATE_PATH = Path(os.environ.get("MAIL_STATE_PATH", "mail_state.json"))
 LOOKBACK = 200  # 初回シード以降、安全のため直近この件数までを走査対象に含める
 
 # 判定キーワード（LOSEを先に見て誤検知を防ぐ。「ご当選とはなりませんでした」対策）
-# 落選（特定的な句。当選判定より先にチェックする＝「ご当選とはなりませんでした」対策）
+# 結果メールではないもの（応募確認・マーケ）。これらは通知しない。
+# ※落選句より後に判定するので、落選メール中の「ご応募ありがとう」等で取りこぼさない
+NOT_RESULT = [
+    # 応募・申込・エントリーの受付/完了系
+    "申込完了", "申込を受け付け", "お申し込みを受け付け", "お申込みを受け付け", "応募完了",
+    "応募を受け付け", "エントリー完了", "エントリーを受け付け", "リクエストを受け付け",
+    "受付完了", "受付のお知らせ", "受付のご連絡", "受け付けました",
+    "ご記入いただきありがとう", "フォームにご記入",
+    # マーケティング・キャンペーン系
+    "キャンペーン", "クーポン", "メルマガ", "セール", "が当たる", "当たるチャンス",
+    "当選のチャンス", "抽選で当たる", "ポイント還元", "爆還元",
+]
+# 落選（特定的な句。当選判定より先にチェック＝「ご当選とはなりませんでした」対策）
 LOSE = [
     "落選", "当選とはなりません", "ご当選とはなり", "ご当選されませんでした", "ご期待に添え",
-    "抽選に外れ", "ご縁がなかった", "今回は見送", "ご用意できません",
+    "抽選に外れ", "ご縁がなかった", "今回は見送", "ご用意できませんでした", "残念ながら、ご",
 ]
-LOSE_GENERIC = ["残念ながら"]  # 汎用的なので文脈ありの時だけ落選扱い
-# 当選（特定的な句は文脈なしでも検知）
+# 当選（実際の当選メールだけが使う特定的な句のみ。曖昧な「当選」単体は使わない）
 WIN_STRONG = [
     "ご当選", "当選されました", "当選しました", "当選のご案内", "ご当選おめでとう",
-    "当選者様", "購入のご案内", "お支払い手続き", "お支払いお手続き",
+    "当選者様", "ご当選者", "購入のご案内", "お支払い手続き", "お支払いお手続き",
 ]
-WIN_WEAK = ["当選", "当選者", "購入権"]  # 汎用的なので文脈ありの時だけ当選扱い
-CONTEXT = ["抽選", "ポケモン", "ポケカ", "カード", "予約", "BOX"]
-# Amazon招待制の当選（件名「おめでとうございます。招待者に選ばれました」等）。
-# 文脈ワードを含まないため専用トリガーとして扱う。
+# Amazon招待制の当選。実際の当選は件名に入る（応募確認は本文で引用するだけ）ので件名限定。
 INVITE = ["招待者に選ばれました", "招待者に選出", "招待者に当選", "招待者に選定"]
 
 
@@ -89,23 +97,24 @@ def _get_body(msg) -> str:
 
 def _classify(subject: str, body: str) -> str | None:
     """当落を判定。'amazon_invite' / 'win' / 'lose' / None（結果メールでない）を返す。"""
+    subj = subject or ""
     text = f"{subject}\n{body}"
-    has_context = any(c in text for c in CONTEXT)
 
-    # 1. Amazon招待制の当選（文脈ワードを含まないので最優先・文脈不要）
-    if any(k in text for k in INVITE):
+    # 1. Amazon招待制の当選（件名限定。応募確認は本文で文言を引用するだけなので件名で判定）
+    if any(k in subj for k in INVITE):
         return "amazon_invite"
-    # 2. 落選（特定句は文脈不要。当選より先に判定し「ご当選とはなりません」を取りこぼさない）
+    # 2. 件名が応募確認・マーケなら結果ではない（本文が当落の流れを説明していても除外）
+    if any(k in subj for k in NOT_RESULT):
+        return None
+    # 3. 落選（特定句。本文マーケ除外より先に見て「ご応募ありがとう＋落選」を取りこぼさない）
     if any(k in text for k in LOSE):
         return "lose"
-    # 3. 当選（特定句は文脈不要、汎用句は文脈ありの時のみ）
+    # 4. 本文が応募確認・マーケなら除外
+    if any(k in text for k in NOT_RESULT):
+        return None
+    # 5. 当選（実際の当選メールだけが使う特定句のみ）
     if any(k in text for k in WIN_STRONG):
         return "win"
-    if has_context and any(k in text for k in WIN_WEAK):
-        return "win"
-    # 4. 汎用的な落選句は文脈ありの時のみ
-    if has_context and any(k in text for k in LOSE_GENERIC):
-        return "lose"
     return None
 
 
@@ -148,10 +157,13 @@ def process_account(spec: dict, email_addr: str, pw: str, user: str,
 
         hits = 0
         for uid in uids:
-            _, msgdata = M.uid("fetch", str(uid), "(RFC822)")
-            if not msgdata or not msgdata[0]:
+            # BODY.PEEK[]＝本文取得しても既読にしない（RFC822だと既読になる）
+            _, msgdata = M.uid("fetch", str(uid), "(BODY.PEEK[])")
+            item = msgdata[0] if msgdata else None
+            # フラグのみ等で本文が取れない応答（item が bytes）はスキップ
+            if not isinstance(item, tuple) or len(item) < 2 or not isinstance(item[1], (bytes, bytearray)):
                 continue
-            msg = email.message_from_bytes(msgdata[0][1])
+            msg = email.message_from_bytes(item[1])
             subject = _decode_header(msg.get("Subject"))
             sender = _decode_header(msg.get("From"))
             body = _get_body(msg)
