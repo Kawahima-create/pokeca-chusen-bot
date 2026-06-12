@@ -79,6 +79,12 @@ def main() -> int:
     else:
         print("[info] 新着なし。通知はスキップしました。")
 
+    # 締切が過ぎた過去の通知メッセージをチャンネルから掃除する
+    try:
+        notifier.sweep_expired(channel, token)
+    except Exception as e:  # noqa: BLE001
+        print(f"[warn] 締切超過メッセージの掃除に失敗: {e}")
+
     save_state({"seen": seen})
     return 0
 
