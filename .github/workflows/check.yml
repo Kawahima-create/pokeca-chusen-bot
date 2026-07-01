@@ -30,7 +30,16 @@ jobs:
       - name: 抽選チェック & 通知
         env:
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          # タイトル別チャンネル（未設定のものは該当タイトルをスキップ）
+          DISCORD_CHANNEL_POKECA: ${{ secrets.DISCORD_CHANNEL_POKECA }}
+          DISCORD_CHANNEL_ONEPIECE: ${{ secrets.DISCORD_CHANNEL_ONEPIECE }}
+          DISCORD_CHANNEL_YUGIOH: ${{ secrets.DISCORD_CHANNEL_YUGIOH }}
+          DISCORD_CHANNEL_FREE: ${{ secrets.DISCORD_CHANNEL_FREE }}
+          # 後方互換: 上記が未設定なら旧単一チャンネル(pokeca)として使う
           DISCORD_CHANNEL_ID: ${{ secrets.DISCORD_CHANNEL_ID }}
+          # ワンピ/遊戯王の入荷Now系ページURL（任意）
+          NYUKA_URL_ONEPIECE: ${{ secrets.NYUKA_URL_ONEPIECE }}
+          NYUKA_URL_YUGIOH: ${{ secrets.NYUKA_URL_YUGIOH }}
         run: python main.py
 
       - name: 状態を保存（変更があれば）

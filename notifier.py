@@ -22,6 +22,24 @@ SECTION_COLOR = {
 }
 SECTION_EMOJI = {"受付中": "🟢", "近日開始": "🟡", "会員限定": "🔵"}
 
+# タイトル別の通知ヘッダ（先頭メッセージに付く新着件数の見出し）
+TITLE_HEADER = {
+    "pokeca":   "🎴 ポケカ抽選 新着 {n}件",
+    "onepiece": "🏴‍☠️ ワンピカ抽選 新着 {n}件",
+    "yugioh":   "🔮 遊戯王抽選 新着 {n}件",
+    "free":     "⚡ 【無料版】公式大型抽選 新着 {n}件",
+}
+# embed フッタ用のタイトルラベル
+TITLE_LABEL = {"pokeca": "ポケカ", "onepiece": "ワンピ", "yugioh": "遊戯王"}
+
+# タイトル→チャンネルID env 名
+TITLE_CHANNEL_ENV = {
+    "pokeca":   "DISCORD_CHANNEL_POKECA",
+    "onepiece": "DISCORD_CHANNEL_ONEPIECE",
+    "yugioh":   "DISCORD_CHANNEL_YUGIOH",
+}
+FREE_CHANNEL_ENV = "DISCORD_CHANNEL_FREE"
+
 
 def _headers(token: str) -> dict:
     return {
@@ -162,7 +180,12 @@ def sweep_expired(
 
 def lottery_embed(lot) -> dict:
     emoji = SECTION_EMOJI.get(lot.section, "🎴")
+    no_shrink = getattr(lot, "no_shrink", False)
     fields = []
+    if no_shrink:
+        fields.append(
+            {"name": "⚠️ 状態", "value": "**シュリンクなし**（未開封フィルムなし）", "inline": False}
+        )
     if lot.sale_type:
         fields.append({"name": "形式", "value": lot.sale_type, "inline": True})
     if lot.start:
@@ -171,12 +194,17 @@ def lottery_embed(lot) -> dict:
         fields.append({"name": "締切", "value": f"**{lot.end}**", "inline": True})
     if lot.result_date:
         fields.append({"name": "当選発表", "value": lot.result_date, "inline": False})
+    title = f"{emoji} {lot.store}"
+    if no_shrink:
+        title += "　⚠️シュリンクなし"
+    label = TITLE_LABEL.get(getattr(lot, "title", ""), "")
+    footer = f"{lot.source}・{lot.section}" + (f"・{label}" if label else "")
     embed = {
-        "title": f"{emoji} {lot.store}",
+        "title": title,
         "description": f"**{lot.product}**",
         "color": SECTION_COLOR.get(lot.section, 0x95A5A6),
         "fields": fields,
-        "footer": {"text": f"{lot.source}・{lot.section}"},
+        "footer": {"text": footer},
     }
     if lot.apply_url:
         embed["url"] = lot.apply_url
@@ -186,21 +214,23 @@ def lottery_embed(lot) -> dict:
     return embed
 
 
-def notify_lotteries(lots: list, channel_id: str, token: str) -> None:
+def notify_lotteries(lots: list, channel_id: str, token: str, *, title: str = "pokeca") -> None:
     """新着抽選を1件=1メッセージで投稿する。
 
     1メッセージ1抽選にしておくと、締切が過ぎた抽選だけを後から個別に
-    削除できる（sweep_expired）。先頭メッセージに新着件数の見出しを付ける。
+    削除できる（sweep_expired）。先頭メッセージにタイトル別の新着件数見出しを付ける。
+    title は "pokeca"/"onepiece"/"yugioh"/"free" のいずれか。
     """
     if not lots:
         return
     # 受付中→近日開始→会員限定 の順で並べる
     order = {"受付中": 0, "近日開始": 1, "会員限定": 2}
     lots = sorted(lots, key=lambda x: order.get(x.section, 9))
+    header = TITLE_HEADER.get(title, "🎴 抽選 新着 {n}件").format(n=len(lots))
     for i, lot in enumerate(lots):
         payload: dict = {"embeds": [lottery_embed(lot)]}
         if i == 0:
-            payload["content"] = f"🎴 **ポケカ抽選 新着 {len(lots)}件**"
+            payload["content"] = f"**{header}**"
         _post(channel_id, token, payload)
 
 
@@ -244,3 +274,34 @@ def get_credentials() -> tuple[str, str]:
             "環境変数 DISCORD_BOT_TOKEN と DISCORD_CHANNEL_ID を設定してください。"
         )
     return channel, token
+
+
+def get_channel_map() -> tuple[dict[str, str], str, str]:
+    """({title: channel_id}, free_channel_id, token) を返す（タイトル別振り分け用）。
+
+    後方互換: 新varが1つも無く旧 DISCORD_CHANNEL_ID のみのときは pokeca にマップし、
+    従来通り単一チャンネル運用になる。タイトルチャンネル未設定はマップから除外する
+    （呼び側が該当タイトルを警告してスキップ）。トークン欠如は SystemExit。
+    """
+    token = os.environ.get("DISCORD_BOT_TOKEN", "").strip()
+    if not token:
+        raise SystemExit("環境変数 DISCORD_BOT_TOKEN を設定してください。")
+
+    channel_map: dict[str, str] = {}
+    for title, env_name in TITLE_CHANNEL_ENV.items():
+        cid = os.environ.get(env_name, "").strip()
+        if cid:
+            channel_map[title] = cid
+    free = os.environ.get(FREE_CHANNEL_ENV, "").strip()
+
+    if not channel_map and not free:
+        legacy = os.environ.get("DISCORD_CHANNEL_ID", "").strip()
+        if legacy:
+            channel_map["pokeca"] = legacy
+
+    if not channel_map and not free:
+        raise SystemExit(
+            "通知先チャンネルが未設定です。DISCORD_CHANNEL_POKECA / ONEPIECE / YUGIOH / FREE "
+            "（または旧 DISCORD_CHANNEL_ID）のいずれかを設定してください。"
+        )
+    return channel_map, free, token

@@ -6,7 +6,10 @@ GitHub Actionsで定期実行。新規メールのみ対象（mail_state.jsonで
 複数メール対応（設定されたアカウントだけ巡回）:
   ICLOUD_EMAIL / ICLOUD_APP_PASSWORD … iCloud（appleid.apple.comのアプリ専用パスワード）
   GMAIL_EMAIL  / GMAIL_APP_PASSWORD  … Gmail（myaccount.google.com/apppasswordsのアプリパスワード）
-  DISCORD_BOT_TOKEN / DISCORD_CHANNEL_ID … 通知Botと同じ
+  DISCORD_BOT_TOKEN … 通知Botと同じ
+  DISCORD_CHANNEL_MAIL … 当落メールの通知先（運営専用プライベートチャンネル）。
+    ※当落は運営者個人のものなので、会員向けチャンネルには絶対に流さないこと。
+    未設定時のみ旧 DISCORD_CHANNEL_ID にフォールバックする。
 任意:
   ICLOUD_IMAP_USER … iCloudログインユーザー名（既定はICLOUD_EMAIL）
 """
@@ -184,10 +187,16 @@ def process_account(spec: dict, email_addr: str, pw: str, user: str,
 
 
 def main() -> int:
-    channel = os.environ.get("DISCORD_CHANNEL_ID", "").strip()
+    # 当落メールは運営者個人のもの。会員向けチャンネルには絶対流さず、
+    # 運営専用のプライベートチャンネル(DISCORD_CHANNEL_MAIL)にだけ投稿する。
+    # 旧構成との互換のため、未設定なら DISCORD_CHANNEL_ID にフォールバック。
+    channel = (
+        os.environ.get("DISCORD_CHANNEL_MAIL", "").strip()
+        or os.environ.get("DISCORD_CHANNEL_ID", "").strip()
+    )
     token = os.environ.get("DISCORD_BOT_TOKEN", "").strip()
     if not (channel and token):
-        raise SystemExit("DISCORD_CHANNEL_ID / DISCORD_BOT_TOKEN を設定してください。")
+        raise SystemExit("DISCORD_CHANNEL_MAIL（または DISCORD_CHANNEL_ID）/ DISCORD_BOT_TOKEN を設定してください。")
 
     state = load_state()
     handled = 0

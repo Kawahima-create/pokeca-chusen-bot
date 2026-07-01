@@ -33,6 +33,9 @@ jobs:
           GMAIL_EMAIL: ${{ secrets.GMAIL_EMAIL }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          # 当落は運営者個人のもの。運営専用プライベートチャンネルにだけ流す
+          DISCORD_CHANNEL_MAIL: ${{ secrets.DISCORD_CHANNEL_MAIL }}
+          # 後方互換フォールバック（DISCORD_CHANNEL_MAIL 未設定時のみ使用）
           DISCORD_CHANNEL_ID: ${{ secrets.DISCORD_CHANNEL_ID }}
         run: python mailcheck.py
 

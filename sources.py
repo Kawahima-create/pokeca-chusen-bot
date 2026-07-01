@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime
 import hashlib
+import os
 import re
 from dataclasses import dataclass, asdict
 
@@ -27,6 +28,22 @@ _DATE_RE = re.compile(r"(\d{1,2})月(\d{1,2})日(?:（[^）]*）|\([^)]*\))?\s*(
 NYUKA_URL = "https://nyuka-now.com/archives/2459"
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 pokeca-chusen-bot"
 
+# タイトル判定キーワード（商品名・店舗名に対する部分一致）。
+# 1行に複数タイトルが混在しうる（例: ノジマ「ポケモンカード、ワンピースカード…」）ため、
+# classify_titles() は該当する全タイトルを返す。
+TITLE_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "pokeca":   ("ポケモンカード", "ポケカ", "ポケモンセンター"),
+    "onepiece": ("ワンピースカード", "ワンピカ", "ONE PIECE", "ワンピース"),
+    "yugioh":   ("遊戯王", "遊☆戯☆王", "ラッシュデュエル", "OCG"),
+}
+
+# 無料「撒き餌」チャンネルへ流す公式大型抽選の店舗（部分一致）。
+# 厳しめ（公式のみ）から開始し、運用で実store値を見て拡張する。
+OFFICIAL_BIG_STORES: tuple[str, ...] = (
+    "ポケモンセンターオンライン",
+    "プレミアムバンダイ",
+)
+
 # 通知対象とするセクション見出し（部分一致）。エントリ見出しはこれらを含まない。
 WANTED_SECTIONS = {
     "応募受付中のストア": "受付中",
@@ -35,6 +52,19 @@ WANTED_SECTIONS = {
 }
 # ここに来たら以降は通知対象外（先着・在庫・履歴・終了）
 STOP_SECTIONS = ("在庫あり", "先着販売", "販売履歴", "通知履歴", "応募受付終了", "過去の")
+
+# シュリンク無し（未シュリンク／開封品）のボックスを示す表記。検知したら通知に明記する。
+# 「シュリンク付き」「シュリンクあり」は拾わないよう、否定語が続く場合だけマッチさせる。
+_NO_SHRINK_RE = re.compile(
+    r"シュリンク\s*(?:なし|無し|無|レス|剥が|剥し|はがし|外し|開封)"
+    r"|未シュリンク|ノーシュリンク|ノンシュリンク|開封品|開封済"
+)
+
+
+def has_no_shrink(*texts: str) -> bool:
+    """商品名・詳細に『シュリンクなし／未シュリンク／開封品』等の表記があれば True。"""
+    joined = " ".join(t for t in texts if t)
+    return bool(_NO_SHRINK_RE.search(joined))
 
 
 @dataclass
@@ -49,6 +79,8 @@ class Lottery:
     sale_type: str       # 抽選形式 / 販売形式
     apply_url: str       # 応募/詳細ページURL
     source_url: str      # 取得元ページ
+    no_shrink: bool = False  # シュリンクなし（未開封フィルムなし）の出品か
+    title: str = ""      # pokeca / onepiece / yugioh / unknown（振り分け用）
 
     @property
     def uid(self) -> str:
@@ -101,12 +133,36 @@ def _section_of(text: str) -> str | None:
     return None
 
 
-def fetch_nyuka(timeout: int = 25) -> list[Lottery]:
-    resp = requests.get(NYUKA_URL, headers={"User-Agent": USER_AGENT}, timeout=timeout)
+def classify_titles(lot: "Lottery", page_hint: str | None = None) -> list[str]:
+    """商品名→店舗名のキーワードで該当する全タイトルを返す（混在行対応）。
+
+    どのキーワードにも当たらなければ page_hint（ソースページのタイトル指定）、
+    それも無ければ ['unknown'] を返す。ソースページ依存ではなく本文判定が主。
+    """
+    text = f"{lot.product} {lot.store}"
+    hits = [t for t, kws in TITLE_KEYWORDS.items() if any(k in text for k in kws)]
+    if hits:
+        return hits
+    return [page_hint] if page_hint else ["unknown"]
+
+
+def classify_title(lot: "Lottery", page_hint: str | None = None) -> str:
+    """代表タイトル1つ（lot.title セットや単一表示用）。"""
+    return classify_titles(lot, page_hint)[0]
+
+
+def is_official_big(lot: "Lottery") -> bool:
+    """無料チャンネルへ流す公式大型抽選か（店舗名の部分一致）。"""
+    return any(s in lot.store for s in OFFICIAL_BIG_STORES)
+
+
+def fetch_nyuka(url: str = NYUKA_URL, *, title_hint: str | None = None, timeout: int = 25) -> list[Lottery]:
+    resp = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=timeout)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "lxml")
 
     results: list[Lottery] = []
+    n_no_shrink = 0
     section: str | None = None
 
     for el in soup.find_all(["h2", "h3"]):
@@ -140,20 +196,29 @@ def fetch_nyuka(timeout: int = 25) -> list[Lottery]:
         product = d.get("対象商品", "")
         if not product:  # 対象商品が無いブロックは抽選エントリではない
             continue
-        results.append(
-            Lottery(
-                source="入荷Now",
-                section=section,
-                store=text,
-                product=product,
-                start=d.get("開始日", ""),
-                end=d.get("終了日", ""),
-                result_date=d.get("当選発表", ""),
-                sale_type=d.get("抽選形式") or d.get("販売形式", ""),
-                apply_url=apply_url,
-                source_url=NYUKA_URL,
-            )
+        # シュリンクなし／開封品は除外せず、フラグを立てて通知時に明記する
+        no_shrink = has_no_shrink(
+            product, d.get("対象商品詳細", ""), d.get("抽選形式", ""), d.get("販売形式", "")
         )
+        if no_shrink:
+            n_no_shrink += 1
+        lot = Lottery(
+            source="入荷Now",
+            section=section,
+            store=text,
+            product=product,
+            start=d.get("開始日", ""),
+            end=d.get("終了日", ""),
+            result_date=d.get("当選発表", ""),
+            sale_type=d.get("抽選形式") or d.get("販売形式", ""),
+            apply_url=apply_url,
+            source_url=url,
+            no_shrink=no_shrink,
+        )
+        lot.title = classify_title(lot, title_hint)
+        results.append(lot)
+    if n_no_shrink:
+        print(f"[info] シュリンクなし表記の抽選 {n_no_shrink}件（明記して通知）")
     return results
 
 
@@ -185,21 +250,60 @@ def is_expired(lot: "Lottery", now: datetime.datetime) -> bool:
     return dt is not None and dt < now
 
 
+# スクレイプ対象の入荷Now系ページ。ワンピ/遊戯王は env で追加できる。
+# title_hint はページ単一タイトル時のフォールバック（本文判定が unknown のときだけ使う）。
+SOURCES: list[dict] = [
+    {"url": NYUKA_URL, "title_hint": "pokeca"},
+]
+
+
+def _sources_from_env() -> list[dict]:
+    """NYUKA_URL_ONEPIECE / NYUKA_URL_YUGIOH からソースを追加する。"""
+    extra: list[dict] = []
+    mapping = {
+        "NYUKA_URL_ONEPIECE": "onepiece",
+        "NYUKA_URL_YUGIOH": "yugioh",
+    }
+    for env_name, hint in mapping.items():
+        url = os.environ.get(env_name, "").strip()
+        if url:
+            extra.append({"url": url, "title_hint": hint})
+    return extra
+
+
 def fetch_all(now: datetime.datetime | None = None) -> list[Lottery]:
-    """全ソースを集約し、締切が過ぎた抽選を除外する。"""
+    """全ソースを集約し、ページ跨ぎの重複を除いた上で締切超過を除外する。"""
     now = now or datetime.datetime.now(JST)
     lotteries: list[Lottery] = []
-    try:
-        lotteries.extend(fetch_nyuka())
-    except Exception as e:  # noqa: BLE001
-        print(f"[warn] 入荷Now の取得に失敗: {e}")
-    kept = [lot for lot in lotteries if not is_expired(lot, now)]
-    dropped = len(lotteries) - len(kept)
+    for src in SOURCES + _sources_from_env():
+        try:
+            lotteries.extend(fetch_nyuka(src["url"], title_hint=src.get("title_hint")))
+        except Exception as e:  # noqa: BLE001
+            print(f"[warn] {src['url']} の取得に失敗: {e}")
+
+    # 同一商品が複数ページに載りうるので uid で重複除去（先勝ち＝SOURCES順）
+    deduped: list[Lottery] = []
+    seen_uids: set[str] = set()
+    for lot in lotteries:
+        if lot.uid not in seen_uids:
+            seen_uids.add(lot.uid)
+            deduped.append(lot)
+
+    kept = [lot for lot in deduped if not is_expired(lot, now)]
+    dropped = len(deduped) - len(kept)
     if dropped:
         print(f"[info] 締切超過のため {dropped}件を除外")
     return kept
 
 
 if __name__ == "__main__":
-    for lot in fetch_all():
-        print(f"[{lot.section}] {lot.store} / {lot.product}  ~{lot.end}  ({lot.uid})")
+    from collections import Counter
+
+    lots = fetch_all()
+    counts: Counter[str] = Counter()
+    for lot in lots:
+        titles = classify_titles(lot)
+        counts.update(titles)
+        big = " 🆓公式大型" if is_official_big(lot) else ""
+        print(f"[{lot.section}] {'/'.join(titles)}{big}  {lot.store} / {lot.product}  ~{lot.end}")
+    print(f"\n[summary] {len(lots)}件  内訳: {dict(counts)}")
